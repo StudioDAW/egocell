@@ -2,15 +2,57 @@ import gi
 gi.require_version("Gtk", "4.0")
 from gi.repository import Gtk, Gdk
 import cairo
-import ast
-from typing import List, Dict, Any
+from typing import List, Dict, Literal
+import math
 
 CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 COLS = 30
 ROWS = 60
 
-cells: Dict[str, dict[str, Any]] = {}
+class Cell:
+    col_str: str
+    row_str: str
+    column: int
+    row: int
+    formula: str
+    content: str
+    def __init__(self, value:str, col_str:str, row_str:str, column:int, row:int, formula:str, content:str,
+                 type_:Literal["Text", "Number", "Date"]="Text"):
+        self.value = value
+        self.col_str = col_str
+        self.row_str = row_str
+        self.column = column
+        self.row = row
+        self.formula = formula
+        self.content = content
+        self.type = "Text"
+
+    def __str__(self) -> str:
+        return str(self.value)
+
+    def __getattr__(self, attr):
+        return getattr(self.value, attr)
+
+    def __type__(self):
+        return "Text"
+
+    def __len__(self):
+        return len(self.value)
+
+    def __add__(self, other):
+        return str(self) + str(other)
+
+    def __radd__(self, other):
+        return str(other) + str(self)
+
+    def __mul__(self, other):
+        return str(self) * other
+
+    def __rmul__(self, other):
+        return other * str(self)
+
+cells: Dict[str, Cell] = {}
 columns: List[List[str]] = []
 rows: List[List[str]] = []
 
@@ -22,18 +64,11 @@ for c in range(COLS):
     for r in range(ROWS):
         i = c//len(CHARS)
         if i == 0:
-            col_id = f"{CHARS[c]}"
+            col_str = f"{CHARS[c]}"
         else:
-            col_id = f"{CHARS[i-1]}{CHARS[c-i*len(CHARS)]}"
-        cell_id = col_id + str(r+1)
-        cells[cell_id] = {
-            "col_id": col_id,
-            "row_id": str(r+1),
-            "column": c,
-            "row": r,
-            "formula": "",
-            "text": "",
-        }
+            col_str = f"{CHARS[i-1]}{CHARS[c-i*len(CHARS)]}"
+        cell_id = col_str + str(r+1)
+        cells[cell_id] = Cell("", col_str, str(r+1), c, r, "", "")
         column.append(cell_id)
         rows[r].append(cell_id)
     columns.append(column)
@@ -43,10 +78,16 @@ CELL_H = 20
 MIN_SCALE = 0.2
 MAX_SCALE = 5.0
 
+formula_globals = {}
+imports = [__builtins__, math]
+for i in imports: formula_globals.update({k: getattr(i, k) for k in dir(i) if not k.startswith("_")})
+def run(expression):
+    return eval(expression, formula_globals, cells)
+
 
 class Sheet(Gtk.Box):
     def __init__(self, window):
-        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.window = window
 
         self.entry = Gtk.Entry()
@@ -58,7 +99,6 @@ class Sheet(Gtk.Box):
         focus_controller.connect("enter", self.on_entry_focus_in)
         focus_controller.connect("leave", self.on_entry_focus_out)
         self.entry.add_controller(focus_controller)
-        self.entry.connect("insert-text", self.on_insert)
 
         self.offset_x = 0
         self.offset_y = 0
@@ -149,25 +189,14 @@ class Sheet(Gtk.Box):
                     ctx.set_line_width(0.4)
                     ctx.stroke()
 
-                formula = cell["formula"]
-                tree = ast.parse(formula)
-                names = set()
-                
-                for node in ast.walk(tree):
-                    if isinstance(node, ast.Name):
-                        names.add((node.id, node.col_offset))
-                
-                for name, col in names:
-                    if name in cells.keys():
-                        formula = formula[:col] + str(eval(cells[name]["formula"])) + formula[col+len(name):]
-
+                formula = cell.formula
                 if formula:
                     try:
-                        cell["text"] = str(eval(formula))
+                        cell.value = str(run(formula))
                     except Exception as e:
-                        cell["text"] = str(e)
-
-                text = cell["text"]
+                        cell.value = str(e)
+                
+                text = cell.value
                 xbearing, ybearing, textw, texth, _, _ = ctx.text_extents(text)
                 tx = x0 + (CELL_W - textw) / 2 - xbearing
                 ty = y0 + (CELL_H - texth) / 2 - ybearing
@@ -179,16 +208,15 @@ class Sheet(Gtk.Box):
 
         ctx.select_font_face("CMU Sans Serif", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
         ctx.set_font_size(12/self.scale)
-        print(self.scale)
 
         bw = .4
 
         for c, cell_id in enumerate(rows[0]):
             x0 = c * CELL_W
             y0 = 0
-            text = cells[cell_id]["col_id"]
+            text = cells[cell_id].col_str
 
-            if c == cells[self.selected]["column"]:
+            if c == cells[self.selected].column:
                 ctx.select_font_face("CMU Sans Serif", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
                 bw = 2
 
@@ -204,7 +232,7 @@ class Sheet(Gtk.Box):
             ctx.stroke()
             ctx.move_to(tx,ty)
             ctx.show_text(text)
-            if c == cells[self.selected]["column"]:
+            if c == cells[self.selected].column:
                 ctx.select_font_face("CMU Sans Serif", cairo.FONT_SLANT_NORMAL, cairo.FONT_SLANT_NORMAL)
                 bw = .4
 
@@ -213,7 +241,7 @@ class Sheet(Gtk.Box):
             y0 = r * CELL_H
             text = str(r+1)
 
-            if r == cells[self.selected]["row"]:
+            if r == cells[self.selected].row:
                 ctx.select_font_face("CMU Sans Serif", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
                 bw = 2
 
@@ -229,7 +257,7 @@ class Sheet(Gtk.Box):
             ctx.stroke()
             ctx.move_to(tx,ty)
             ctx.show_text(text)
-            if r == cells[self.selected]["row"]:
+            if r == cells[self.selected].row:
                 ctx.select_font_face("CMU Sans Serif", cairo.FONT_SLANT_NORMAL, cairo.FONT_SLANT_NORMAL)
             bw = .4
 
@@ -317,11 +345,11 @@ class Sheet(Gtk.Box):
         if 0 <= cell_x < COLS and 0 <= cell_y < ROWS:
             cell = columns[cell_x][cell_y]
             if self.selected == cell:
-                self.entry.set_text(cells[self.selected]["formula"])
+                self.entry.set_text(cells[self.selected].formula)
                 self.window.set_focus(self.entry)
             else:
                 self.selected = cell
-                self.entry.set_text(cells[self.selected]["formula"])
+                self.entry.set_text(cells[self.selected].formula)
                 self.window.set_focus(None)
         else:
             self.selected = ""
@@ -332,12 +360,9 @@ class Sheet(Gtk.Box):
         self.window.set_focus(None)
         if self.selected != "":
             text = entry.get_text()
-            cells[self.selected]["formula"] = text
+            cells[self.selected].formula = text
             self.entry.set_text("")
             self.da.queue_draw()
-
-    def on_insert(self, entry, text, length, position):
-        pass
 
 
     def on_key_released(self, controller, keyval, keycode, state):
@@ -351,8 +376,8 @@ class Sheet(Gtk.Box):
             self.entry.set_text("")
 
         if self.go_mode:
-            col = cells[self.selected]["column"]
-            row = cells[self.selected]["row"]
+            col = cells[self.selected].column
+            row = cells[self.selected].row
             # exit
             if not key.isdigit() and self.go_row != "":
                 self.go_mode = False
@@ -361,7 +386,7 @@ class Sheet(Gtk.Box):
             # go to row in column
             elif key.isdigit():
                 self.go_row += key
-                self.select(cells[self.selected]["col_id"]+self.go_row)
+                self.select(cells[self.selected].col_str+self.go_row)
             # go to column
             elif key.upper() in CHARS:
                 self.go_col += key.upper()
@@ -378,6 +403,19 @@ class Sheet(Gtk.Box):
                 self.map_multiplier = ""
             self.da.queue_draw()
             return True
+        elif self.entry_has_focus:
+            text = self.entry.get_text()
+            if self.entry.get_selection_bounds() == ():
+                if text and key != "BackSpace":
+                    lsp = []
+                    for glob in formula_globals:
+                        if glob.startswith(text):
+                            lsp.append(glob)
+                    if len(lsp) > 0:
+                        s = len(text)
+                        self.entry.set_text(lsp[0])
+                        self.entry.select_region(s, -1)
+
         self.da.queue_draw()
             
     def on_key_pressed(self, controller, keyval, keycode, state):
@@ -386,7 +424,7 @@ class Sheet(Gtk.Box):
 
     def select(self, selection):
         self.selected = selection
-        self.entry.set_text(cells[self.selected]["formula"])
+        self.entry.set_text(cells[self.selected].formula)
 
 
     def on_entry_focus_in(self, event):
@@ -400,7 +438,7 @@ class Sheet(Gtk.Box):
         x *= int(self.map_multiplier) if self.map_multiplier else 1
         y *= int(self.map_multiplier) if self.map_multiplier else 1
         cell = cells[self.selected]
-        self.select(columns[cell["column"]+x][cell["row"]+y])
+        self.select(columns[cell.column+x][cell.row+y])
 
     def move_left(self): self.move(-1,0)
     def move_down(self): self.move(0,1)
@@ -411,7 +449,7 @@ class Sheet(Gtk.Box):
 
     def insert_mode(self):
         self.entry.grab_focus()
-        self.entry.set_text(cells[self.selected]["formula"])
+        self.entry.set_text(cells[self.selected].formula)
 
 
 class App(Gtk.Application):
@@ -429,7 +467,7 @@ class App(Gtk.Application):
         key_controller.connect("key-pressed", sheet.on_key_pressed)
         key_controller.connect("key-released", sheet.on_key_released)
         win.add_controller(key_controller)
-
+    
         win.set_child(sheet)
         win.present()
 
