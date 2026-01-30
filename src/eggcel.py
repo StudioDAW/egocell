@@ -401,12 +401,12 @@ class Sheet(Gtk.Box):
 
 class App(Gtk.Application):
     def __init__(self):
-        super().__init__(application_id="net.studiodaw.egocell")
+        super().__init__(application_id="net.studiodaw.eggcel")
 
     def do_activate(self):
         win = Gtk.ApplicationWindow(application=self)
         win.set_default_size(900, 400)
-        win.set_title("egocell")
+        win.set_title("eggcel")
 
         sheet = Sheet(win)
 
